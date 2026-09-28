@@ -515,7 +515,7 @@ To install the skill, place the file above in the agent's skills directory as `s
 
 The agent reads the file and restyles the existing Q1 figure: it sets the $7\times4.5$ inch size, adds axis labels "Number of neighbors k" and "Squared error", uses darkorange / deepskyblue / black for the three curves, adds markers, and places the legend in the upper right. Compared with the original quick plot, the revised version has consistent font sizes, no clipped labels, and a legend that does not cover the MSE curve. I like the changes because they make the figure readable when embedded in the HTML submission; I did not need to revise the skill a second time.
 
-### ### (c) Final skill and reflection
+### (c) Final skill and reflection
 
 The final `SKILL.md` is the file in part (a). My choices were:
 
