@@ -1,0 +1,292 @@
+---
+title: "Homework 06"
+pagetitle: "Homework 06"
+body-classes: "lecture-page practice-page"
+format:
+  html:
+    embed-resources: true
+    html-math-method: mathml
+    page-layout: full
+    toc: true
+    toc-location: body
+    toc-title: "On this page"
+    toc-depth: 2
+---
+
+```{python}
+#| include: false
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import roc_curve, roc_auc_score
+
+plt.rcParams["figure.dpi"] = 110
+```
+
+## Question 1: Compare KNN and logistic regression
+
+Use [breast-cancer.csv](data/breast-cancer.csv), which contains 569 cases from the [Wisconsin Diagnostic Breast Cancer dataset](https://archive.ics.uci.edu/dataset/17/breast%2Bcancer%2Bwisconsin%2Bdiagnostic). Predict `y` (1 for malignant and 0 for benign) using `mean_radius`, `mean_texture`, and `mean_smoothness`.
+
+Set a random seed and randomly split the observations into 70% training and 30% test data. Use the same split for every model. Standardize the predictors using the training means and standard deviations, and apply the same transformations to the test data.
+
+Fit ordinary logistic regression with an intercept and no penalty, and KNN with Euclidean distance, equal neighbor weights, and
+
+$$
+k\in\{5,15,25,35,45\}.
+$$
+
+Using the estimated probabilities for `y = 1` on the test data, plot all six ROC curves in one figure and report their AUC values. Which of the six fitted models do you prefer? Give a brief justification based on your results.
+
+### Data preparation
+
+```{python}
+# Load the data and select the three predictors
+cancer = pd.read_csv("data/breast-cancer.csv")
+features = ["mean_radius", "mean_texture", "mean_smoothness"]
+X = cancer[features].to_numpy()
+y = cancer["y"].to_numpy()
+
+# Fixed seed; 70% training / 30% test split, shared by every model
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.30, random_state=432
+)
+
+# Standardize using the TRAINING mean and SD only, then apply to the test set
+scaler = StandardScaler()
+X_train_s = scaler.fit_transform(X_train)
+X_test_s = scaler.transform(X_test)
+
+print(f"Training observations: {X_train_s.shape[0]}")
+print(f"Test observations:     {X_test_s.shape[0]}")
+print("Training means used for standardization:",
+      np.round(scaler.mean_, 4))
+print("Training SDs used for standardization:  ",
+      np.round(scaler.scale_, 4))
+```
+
+### Fit the six models
+
+```{python}
+models = []
+
+# Ordinary logistic regression: intercept included, no penalty (C = inf)
+logit = LogisticRegression(
+    penalty=None, solver="lbfgs", max_iter=1000, tol=1e-10
+)
+models.append(("Logistic regression", logit))
+
+# KNN: Euclidean distance, equal (uniform) neighbor weights
+for k in [5, 15, 25, 35, 45]:
+    knn = KNeighborsClassifier(
+        n_neighbors=k, metric="euclidean", weights="uniform"
+    )
+    models.append((f"KNN, k = {k}", knn))
+
+# Report the fitted logistic coefficients
+logit.fit(X_train_s, y_train)
+print("Logistic intercept:      ", round(float(logit.intercept_[0]), 4))
+print("Logistic coefficients for", features, ":")
+print(np.round(logit.coef_[0], 4))
+```
+
+### ROC curves and AUC on the test set
+
+```{python}
+records = []
+fig, ax = plt.subplots(figsize=(5.5, 5))
+
+for name, model in models:
+    model.fit(X_train_s, y_train)
+    # Estimated probability of y = 1 on the test set
+    p_hat = model.predict_proba(X_test_s)[:, 1]
+    fpr, tpr, _ = roc_curve(y_test, p_hat)
+    auc = roc_auc_score(y_test, p_hat)
+    records.append({"Model": name, "Test AUC": auc})
+    ax.plot(fpr, tpr, lw=1.5, label=f"{name} (AUC = {auc:.4f})")
+
+# Reference line for random ranking
+ax.plot([0, 1], [0, 1], "k--", lw=1, alpha=0.5,
+        label="Random guess (AUC = 0.5)")
+ax.set_xlabel("False-positive rate (1 - specificity)", fontsize=9)
+ax.set_ylabel("True-positive rate (sensitivity)", fontsize=9)
+ax.set_title("Q1: ROC curves on the test set", fontsize=10)
+ax.tick_params(labelsize=8)
+ax.set_xlim(0, 1)
+ax.set_ylim(0, 1)
+ax.set_aspect("equal")
+ax.legend(loc="lower right", fontsize=7.5, framealpha=0.9)
+fig.tight_layout()
+plt.show()
+```
+
+```{python}
+auc_table = pd.DataFrame(records).set_index("Model")
+auc_table.round(4)
+```
+
+### Choice and justification
+
+All six models rank the classes well (every AUC is far above the 0.5 random benchmark), and all six ROC curves lie close to the upper-left corner. The test AUC values are:
+
+| Model | Test AUC |
+|---|---|
+| Logistic regression | 0.9822 |
+| KNN, k = 5 | 0.9560 |
+| KNN, k = 15 | 0.9705 |
+| KNN, k = 25 | 0.9784 |
+| KNN, k = 35 | 0.9780 |
+| KNN, k = 45 | 0.9784 |
+
+I prefer the ordinary logistic regression model. It has the highest test AUC (0.9822), so its estimated probabilities give the best ranking of malignant versus benign cases on the held-out test set. The KNN results improve as $k$ grows and plateau around an AUC of roughly 0.978 for $k \ge 25$, but none of them exceed logistic regression.
+
+Beyond the slightly higher AUC, logistic regression is also attractive here because (i) it is a smooth, global model whose fitted probabilities do not jump around in response to a few local training points, so it is less variable than small-$k$ KNN, and (ii) its coefficients are directly interpretable. All three fitted coefficients are positive, meaning that a larger radius, texture, or smoothness is associated with higher odds of malignancy after standardization.
+
+The margin over the best KNN models is small (about 0.004 in AUC), and with only 171 test observations this difference could partly reflect sampling variation, so the six models should not be viewed as dramatically different. Nevertheless, logistic regression combines the best measured ranking with stability and interpretability, making it the most defensible single choice.
+
+## Question 2: Training and test ROC curves
+
+Use the same data, training/test split, and standardization as in Question 1. Fit KNN with Euclidean distance, equal neighbor weights, and
+
+$$
+k\in\{1,3,5,10,20\}.
+$$
+
+Use each fitted model to estimate probabilities for both the training and test observations. For training predictions, include each observation itself among its $k$ nearest neighbors.
+
+For each $k$, use a separate panel to show the training and test ROC curves together. Report both AUC values.
+
+Explain the difference between training and test performance and how it changes with $k$. In particular, explain what happens at $k=1$ and why training performance may not reflect performance on new observations.
+
+### Fit the models and build the panels
+
+```{python}
+# Same data, split, and standardization as in Question 1 (identical seed)
+cancer = pd.read_csv("data/breast-cancer.csv")
+features = ["mean_radius", "mean_texture", "mean_smoothness"]
+X = cancer[features].to_numpy()
+y = cancer["y"].to_numpy()
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.30, random_state=432
+)
+scaler = StandardScaler()
+X_train_s = scaler.fit_transform(X_train)
+X_test_s = scaler.transform(X_test)
+
+k_values = [1, 3, 5, 10, 20]
+rows = []
+
+fig, axes = plt.subplots(2, 3, figsize=(8, 6))
+axes = axes.ravel()
+
+for idx, k in enumerate(k_values):
+    knn = KNeighborsClassifier(
+        n_neighbors=k, metric="euclidean", weights="uniform"
+    )
+    knn.fit(X_train_s, y_train)
+
+    # Training probabilities: predict_proba on the training data includes
+    # each observation itself (its distance to itself is 0, so it is the
+    # first nearest neighbor).
+    p_train = knn.predict_proba(X_train_s)[:, 1]
+    # Test probabilities on observations the model never saw
+    p_test = knn.predict_proba(X_test_s)[:, 1]
+
+    fpr_tr, tpr_tr, _ = roc_curve(y_train, p_train)
+    fpr_te, tpr_te, _ = roc_curve(y_test, p_test)
+    auc_tr = roc_auc_score(y_train, p_train)
+    auc_te = roc_auc_score(y_test, p_test)
+    rows.append({"k": k, "Train AUC": auc_tr, "Test AUC": auc_te,
+                 "Train - Test gap": auc_tr - auc_te})
+
+    ax = axes[idx]
+    ax.plot(fpr_tr, tpr_tr, color="darkorange", lw=1.2,
+            label=f"Train (AUC = {auc_tr:.4f})")
+    ax.plot(fpr_te, tpr_te, color="deepskyblue", lw=1.2,
+            label=f"Test (AUC = {auc_te:.4f})")
+    ax.plot([0, 1], [0, 1], "k--", lw=0.8, alpha=0.4)
+    ax.set_title(f"k = {k}")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_aspect("equal")
+    ax.tick_params(labelsize=7)
+    ax.legend(loc="lower right", fontsize=6.5, framealpha=0.9)
+    if idx % 3 == 0:
+        ax.set_ylabel("True-positive rate (sensitivity)", fontsize=8)
+    if idx >= 3:
+        ax.set_xlabel("False-positive rate (1 - specificity)", fontsize=8)
+
+axes[5].axis("off")  # unused sixth panel
+fig.suptitle("Q2: Training vs. test ROC curves for KNN", fontsize=11, y=1.02)
+fig.tight_layout(rect=[0, 0, 1, 0.97])
+plt.show()
+```
+
+```{python}
+gap_table = pd.DataFrame(rows).set_index("k")
+gap_table.round(4)
+```
+
+### Explanation
+
+The AUC values are:
+
+| $k$ | Train AUC | Test AUC | Train − Test gap |
+|---:|---:|---:|---:|
+| 1 | 1.0000 | 0.8962 | 0.1038 |
+| 3 | 0.9929 | 0.9114 | 0.0814 |
+| 5 | 0.9870 | 0.9560 | 0.0310 |
+| 10 | 0.9825 | 0.9636 | 0.0189 |
+| 20 | 0.9788 | 0.9706 | 0.0082 |
+
+**Training is always better than test, because KNN memorizes the training observations.** A KNN model stores the entire training set and forms a prediction by averaging nearby stored labels. When it is evaluated back on those same stored observations, it is looking at the very data it was built from, so its training performance is optimistically biased. The test set is independent and gives an honest estimate of how the model will rank new observations.
+
+**What happens at $k = 1$.** At $k = 1$, the single nearest neighbor of any training observation is the observation itself, because its distance to itself is zero and it is explicitly included among its neighbors. The fitted "probability" for a training point is therefore just its own label, either 0 or 1, and every training point is classified perfectly. This forces the training ROC curve to reach the upper-left corner with an AUC of exactly 1.000. This is not genuine learning; it is memorization. On a new test point there is no self to fall back on, so the prediction depends entirely on one nearby observation, which may be a noisy or mislabeled case. The result is a high-variance, overfit rule with the worst test AUC of the five (0.8962) and the largest train–test gap (0.104).
+
+**How the difference changes with $k$.** As $k$ increases, each prediction averages the labels of more neighbors, which smooths out local noise and reduces the variance of the fitted probabilities. This has two visible effects:
+
+- Training AUC *decreases* monotonically (1.000 → 0.979), because the model can no longer reproduce every training label exactly.
+- Test AUC *increases* over this range (0.896 → 0.971), because the smoother rule generalizes better.
+
+Consequently, the train–test gap shrinks steadily from 0.104 at $k = 1$ to only 0.008 at $k = 20$, and the two curves in each panel move closer together. Small $k$ gives a low-bias but high-variance, overfit model; larger $k$ lowers variance at the cost of introducing some bias, since distant, less relevant neighbors are included in the average.
+
+The main lesson is that near-perfect training performance—especially for small $k$—does not indicate how the model will perform on new observations. Performance must be assessed on an independent test set, and the size of the train–test gap is a useful diagnostic of overfitting.
+
+## Question 3: Peer evaluation of Homework 5
+
+You will receive two Homework 5 submissions to review. The instructor's GitHub account, **rqzhu-aide**, will open a **GitHub Issue** in the repository containing your Homework 5 submission. It will contain links to two other students' repositories, where you can find their submitted homework reports.
+
+Open your repository's **Issues** tab on GitHub to find the assignment. You may ask AI to explain GitHub Issues or help you locate the assignment.
+
+Choose **one specific mistake or item for improvement** from any question in either report.
+
+1. **Identify the mistake or item for improvement.** State which report and question you selected, and briefly describe what is wrong or could be improved. Examples include incorrect code, a calculation error, a misinterpretation of results, a plot that could communicate the findings more clearly, or anything else you think could be done better.
+
+2. **Explain your assessment.** Quote the relevant text, code, or figure caption exactly. Explain why the selected answer is incorrect or how it could be improved, referring to its reasoning, calculations, code, figures, or interpretation. **Complete this part yourself, without AI assistance.**
+
+3. **Provide a correction.** Write a corrected or improved answer to the selected question, including any calculations, code, or figures needed.
+
+After completing your review, **open a GitHub Issue in the repository containing the report you selected**. Identify the report and question, and include your assessment and a detailed revision plan explaining what the author should change and why. Include a link to your posted GitHub Issue in your Homework 6 answer.
+
+### My review
+
+**Selected report:** Bich-Yen's homework-05
+
+**Question:** The self-declared note from the author at the end of the report regarding the submitted report: "I lost my entire local work history for this homework when my AI agent committed and pushed week-05-question.md. I tried to restore my work based on chat logs, but I ran out of time."
+
+
+**My assessment:** As the author states at the end of the report, the submission was reconstructed rather than fully re-run, which raises doubts about its reproducibility. In particular, none of the tabulated results — the bias, variance, and MSE in Question 1, the test MSE in Question 2, or the averaged MSE in Question 3 — can be confirmed to match the output of the accompanying code.
+
+**Provide a correction:** To make the submission fully reproducible and verifiable, I suggest the following:
+
+1. **Re-run every code chunk from a clean session**, top to bottom, using the reported random seeds for each simulation question as the assignment requires.
+
+2. **Record the computing environment** by appending the output of `sessionInfo()` (or the Python equivalent), so that the R version and the versions of key packages (e.g., `kknn`, `glmnet`) are documented.
+
+3. **Recompute and cross-check every reported number**, so that the tables in Questions 1–3 exactly match the output produced by the code in the report.
+
+**Link to my posted GitHub Issue:** https://github.com/Bich-Yen/stat432-fall2026/issues/3
