@@ -1,0 +1,309 @@
+---
+title: "Homework 08"
+pagetitle: "Homework 08"
+body-classes: "lecture-page practice-page"
+format:
+  html:
+    embed-resources: true
+    html-math-method: mathml
+    page-layout: full
+    toc: true
+    toc-location: body
+    toc-title: "On this page"
+    toc-depth: 2
+    code-fold: true
+    code-summary: "Show the workflow"
+---
+
+The former kernel-tuning question has moved to Homework 09.
+
+Solutions for Questions 1 and 2 will be available after Monday, October 19, 2026. No solution can be provided for Question 3.
+
+For Questions 1 and 2, use either R or Python.
+
+## Question 1: Boundary and margin
+
+Use `margin-geometry-20.csv` from the combined ZIP, which contains 20 observations with predictors $x_1,x_2$ and class labels $y\in\{-1,1\}$. Consider the score
+
+$$
+f(x)=0.8x_1+0.6x_2.
+$$
+
+Since $\|(0.8,0.6)\|_2=1$, the lines $f(x)=\pm1$ are each a distance 1 from the decision boundary $f(x)=0$.
+
+a. Calculate the distance from every observation to the decision boundary and its functional margin $yf(x)$. In a table, report these values and whether each observation is inside, on, or beyond the margin for its class. Compare $yf(x)$ with 1 to make this distinction.
+
+b. Plot the observations, the boundary $f(x)=0$, and the margin lines $f(x)=\pm1$. Distinguish the two classes and identify the observations inside the margin in your plot.
+
+c. Report how many observations are inside, on, and beyond the margin. Which observations are misclassified by this decision rule?
+
+Use the observation numbers supplied in the data. Set the $x_1$ axis to $[-3.2,3.2]$, set the $x_2$ axis to $[-3,3]$, and use an equal aspect ratio. Do not fit a new classifier for this question.
+
+### (a) Distances and functional margins
+
+Write $\boldsymbol\beta=(0.8,0.6)^{\mathsf T}$. Since $\|\boldsymbol\beta\|_2=1$, the perpendicular distance to the boundary is
+
+$$
+d_i=\frac{|f(\mathbf x_i)|}{\|\boldsymbol\beta\|_2}
+=|0.8x_{i1}+0.6x_{i2}|,
+\qquad m_i=y_i f(\mathbf x_i).
+$$
+
+The distance is nonnegative, whereas the functional margin is negative for a misclassified observation. I classify an observation as **inside** its class margin when $m_i<1$, **on** the margin when $m_i=1$, and **beyond** the margin when $m_i>1$. This class-specific definition includes misclassified observations in the inside category.
+
+```{python}
+#| label: hw8-q1a-python
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from IPython.display import display
+
+data_dir = Path("data")
+geometry = pd.read_csv(data_dir / "margin-geometry-20.csv")
+beta = np.array([0.8, 0.6])
+score = geometry[["x1", "x2"]].to_numpy() @ beta
+functional_margin = geometry["y"].to_numpy() * score
+# Allow only floating-point roundoff when deciding equality to one.
+on_margin = np.isclose(functional_margin, 1.0, atol=1e-10, rtol=0)
+position = np.where(on_margin, "On",
+                    np.where(functional_margin < 1, "Inside", "Beyond"))
+results = geometry.assign(
+    score=score,
+    distance=np.abs(score) / np.linalg.norm(beta),
+    functional_margin=functional_margin,
+    position=position,
+)
+display(results.style.hide(axis="index").format({
+    "x1": "{:.2f}", "x2": "{:.2f}", "score": "{:.2f}",
+    "distance": "{:.2f}", "functional_margin": "{:.2f}",
+}))
+```
+
+For example, observation 1 has $f(\mathbf x_1)=1$, distance 1, and functional margin 1, so it is on the margin. Observation 10 has $f(\mathbf x_{10})=-0.20$ and $y_{10}=1$: its distance is $0.20$, but its functional margin is $-0.20$, indicating a classification error.
+
+### (b) Boundary and margin plot
+
+The three lines can be written as $x_2=(c-0.8x_1)/0.6$ for $c=0,1,-1$. Color and marker shape distinguish the classes. Orange rings identify all observations inside their class margins; labels are the supplied observation numbers.
+
+```{python}
+#| label: hw8-q1b-python
+#| fig-width: 7
+#| fig-height: 6.8
+#| fig-alt: "Two classes in the x1-x2 plane, the fixed decision boundary and two margin lines. Orange rings mark observations 8, 9, 10, 18, 19, and 20 inside their class margins."
+fig, ax = plt.subplots(figsize=(7, 6.8))
+line_x = np.linspace(-3.2, 3.2, 300)
+ax.plot(line_x, -0.8 * line_x / 0.6, color="black",
+        label=r"Boundary $f(x)=0$", linewidth=1.5)
+for c in [-1, 1]:
+    ax.plot(line_x, (c - 0.8 * line_x) / 0.6, "--", color="gray",
+            label=fr"Margin $f(x)={c}$", linewidth=1.2)
+for cls, color, marker in [(1, "#0072B2", "o"), (-1, "#009E73", "^")]:
+    group = results.loc[results.y == cls]
+    ax.scatter(group.x1, group.x2, color=color, marker=marker,
+               s=48, label=fr"$y={cls}$", zorder=3)
+inside = results.loc[results.position == "Inside"]
+ax.scatter(inside.x1, inside.x2, s=145, facecolors="none",
+           edgecolors="#D55E00", linewidths=1.7,
+           label="Inside class margin", zorder=4)
+for row in results.itertuples():
+    ax.annotate(str(row.observation), (row.x1, row.x2),
+                xytext=(5, 6), textcoords="offset points", fontsize=9)
+ax.set(xlim=(-3.2, 3.2), ylim=(-3, 3), xlabel=r"$x_1$", ylabel=r"$x_2$",
+       title="Fixed decision boundary and class margins")
+ax.set_aspect("equal", adjustable="box")
+ax.grid(alpha=0.2)
+ax.legend(loc="upper left", fontsize=8.5)
+fig.tight_layout()
+plt.show()
+```
+
+### (c) Counts and misclassified observations
+
+```{python}
+#| label: hw8-q1c-python
+counts = results.position.value_counts().reindex(["Inside", "On", "Beyond"], fill_value=0)
+display(counts.rename_axis("Position").reset_index(name="Count").style.hide(axis="index"))
+for category in ["Inside", "On", "Beyond"]:
+    print(f"{category}: {results.loc[results.position == category, 'observation'].tolist()}")
+misclassified = results.loc[results.functional_margin < 0, "observation"].tolist()
+print("Misclassified observations:", misclassified)
+assert not np.isclose(score, 0).any()  # No boundary ties need a prediction rule.
+```
+
+There are **6 inside**, **2 on**, and **12 beyond** the margin. The inside observations are **8, 9, 10, 18, 19, 20**; observations **1 and 11** are on the margin. Only **10 and 20** are misclassified, because their functional margins are negative. The other four inside observations are correctly classified but have functional margins below 1. No new classifier is fitted.
+
+## Question 2: Margin in four dimensions
+
+Use `margin-geometry-4d.csv` from the combined ZIP, which contains 50 observations with four predictors and class labels $y\in\{-1,1\}$. Consider the linear score
+
+$$
+f(\mathbf{x})=\beta_0+\mathbf{x}^{\mathsf T}\boldsymbol{\beta},
+\qquad
+\beta_0=-1,
+\quad
+\boldsymbol{\beta}=(1,2,-2,4)^{\mathsf T}.
+$$
+
+a. Project the observations onto the direction of $\boldsymbol{\beta}$ and plot their positions on one axis. Distinguish the two classes and mark the decision boundary. Use the plot to calculate the geometric margin $M$, the distance from the boundary to the closest observation.
+
+b. Express the same decision boundary using the SVM normalization in which the smallest functional margin $y_i f(\mathbf{x}_i)$ is set to 1. What are the corresponding values of $\boldsymbol{\beta}$ and $\beta_0$?
+
+### (a) Projection and geometric margin
+
+The length of the coefficient vector is $\|\boldsymbol\beta\|_2=\sqrt{1^2+2^2+(-2)^2+4^2}=5$. Therefore, the unit vector in its direction and the scalar projection are
+
+$$
+\mathbf u=\frac{\boldsymbol\beta}{5}
+=(0.2,0.4,-0.4,0.8)^{\mathsf T},\qquad
+z_i=\mathbf x_i^{\mathsf T}\mathbf u.
+$$
+
+The score becomes $f(\mathbf x_i)=-1+5z_i$, so the decision boundary is at $z_0=1/5=0.2$ on this axis. The perpendicular distance is $d_i=|z_i-0.2|=|f(\mathbf x_i)|/5$.
+
+```{python}
+#| label: hw8-q2a-python
+#| fig-width: 7.5
+#| fig-height: 2.8
+#| fig-alt: "One-dimensional projections of all 50 observations, with boundary at 0.2. The nearest negative and positive projections are -0.8 and 1.2, each one unit from the boundary. Repeated positions are stacked for visibility."
+geometry4 = pd.read_csv(data_dir / "margin-geometry-4d.csv")
+beta4 = np.array([1.0, 2.0, -2.0, 4.0])
+intercept4 = -1.0
+norm4 = np.linalg.norm(beta4)
+X4 = geometry4[["x1", "x2", "x3", "x4"]].to_numpy()
+z = X4 @ (beta4 / norm4)
+score4 = intercept4 + X4 @ beta4
+boundary_z = -intercept4 / norm4
+distance4 = np.abs(z - boundary_z)
+M = distance4.min()
+nearest = np.isclose(distance4, M, atol=1e-10, rtol=0)
+projection = geometry4.assign(projection=z, score=score4,
+                              functional_margin=geometry4.y * score4,
+                              distance=distance4)
+display(projection.loc[nearest, ["observation", "y", "projection", "score", "distance"]]
+        .style.hide(axis="index").format({"projection": "{:.2f}", "score": "{:.2f}", "distance": "{:.2f}"}))
+print(f"Geometric margin M = {M:.6f}")
+
+# Stack identical projections vertically; only horizontal position encodes z.
+plot_data = projection.assign(z_key=np.round(z, 10))
+plot_data["stack"] = plot_data.groupby("z_key").cumcount() * 0.15
+fig, ax = plt.subplots(figsize=(7.5, 2.8))
+ax.axhline(0, color="gray", linewidth=0.8)
+for cls, color, marker in [(-1, "#009E73", "^"), (1, "#0072B2", "o")]:
+    group = plot_data.loc[plot_data.y == cls]
+    ax.scatter(group.projection, group["stack"], color=color, marker=marker,
+               s=42, label=fr"$y={cls}$", zorder=3)
+ax.axvline(boundary_z, color="black", label=r"Boundary $z=0.2$")
+for edge in [-0.8, 1.2]:
+    ax.axvline(edge, color="gray", linestyle="--", linewidth=1)
+    ax.annotate("", xy=(edge, -0.18), xytext=(boundary_z, -0.18),
+                arrowprops={"arrowstyle": "<->", "color": "#D55E00"})
+    ax.text((edge + boundary_z) / 2, -0.28, "$M=1$", ha="center", fontsize=10)
+for row in plot_data.loc[nearest].itertuples():
+    ax.annotate(str(row.observation), (row.projection, row.stack),
+                xytext=(5, 4), textcoords="offset points", fontsize=9)
+ax.set(xlim=(-2.45, 2.85), ylim=(-0.38, 0.60), yticks=[],
+       xlabel=r"Projection $z=(x_1+2x_2-2x_3+4x_4)/5$",
+       title="Four-dimensional observations projected onto the normal direction")
+ax.spines[["left", "right", "top"]].set_visible(False)
+ax.legend(loc="upper center", ncol=3, fontsize=9)
+fig.tight_layout()
+plt.show()
+```
+
+The largest projection in class $-1$ is $-0.8$ (observations **15 and 36**), and the smallest projection in class $1$ is $1.2$ (observations **4 and 33**). Thus all observations lie on the correct side of $0.2$, and
+
+$$
+\boxed{M=\min\{0.2-(-0.8),\;1.2-0.2\}=1.}
+$$
+
+Repeated projections are stacked only to make all 50 observations visible; vertical position has no geometric meaning. The margin is the boundary-to-point distance 1; the full gap between the two nearest class positions is 2.
+
+### (b) SVM normalization
+
+All functional margins are positive, and the smallest is $\min_i y_i f(\mathbf x_i)=5$. Dividing both the intercept and slopes by this positive constant preserves the boundary and all predicted classes:
+
+$$
+\boxed{\boldsymbol\beta^*=(0.2,0.4,-0.4,0.8)^{\mathsf T},
+\qquad \beta_0^*=-0.2.}
+$$
+
+Then $f^*(\mathbf x)=f(\mathbf x)/5=z-0.2$ and $\min_i y_i f^*(\mathbf x_i)=1$. Also,
+$\|\boldsymbol\beta^*\|_2=1$, giving $M=1/\|\boldsymbol\beta^*\|_2=1$, consistent with part (a). This rescales the supplied rule; it does not fit a new SVM.
+
+```{python}
+#| label: hw8-q2b-python
+minimum_functional_margin = np.min(geometry4.y.to_numpy() * score4)
+assert minimum_functional_margin > 0
+beta_svm = beta4 / minimum_functional_margin
+intercept_svm = intercept4 / minimum_functional_margin
+normalized_margins = geometry4.y.to_numpy() * (intercept_svm + X4 @ beta_svm)
+print("Original minimum functional margin:", minimum_functional_margin)
+print("Normalized slopes:", beta_svm)
+print("Normalized intercept:", intercept_svm)
+print("Normalized minimum functional margin:", normalized_margins.min())
+assert np.isclose(normalized_margins.min(), 1)
+assert np.isclose(1 / np.linalg.norm(beta_svm), M)
+```
+
+## Question 3: Peer review of a Homework 7 skill
+
+The instructor's GitHub account, **rqzhu-aide**, will open a **GitHub Issue** in the repository containing your Homework 7 submission. It will link to **one** assigned student's repository.
+
+1. **Use the skill.** Find the complete skill definition in the assigned student's Homework 7 report. Copy it without changes into a local `SKILL.md` file in your own folder. You do not need to install it. Give your agent the path to the file and explicitly ask it to follow that skill while analyzing the `SAheart` data, using the response and predictor coding from Homework 7. Provide the necessary data information, but no additional preferences about methods, figures, model selection, or report style. Let the skill direct the analysis.
+
+   Monitor the time, your token use, and your weekly quota while the agent works. If the run is taking too long or using your allowance too quickly, you may send a **steer message** asking the agent to finish immediately, or stop the run and summarize what you observed. A steer message redirects an agent while it is working; learn how to send one in your AI tool before starting.
+
+2. **Write a peer review.** Read the student's submitted report and what the skill produced in your run. Give a brief overall assessment, followed by **three major items the author could improve**. You may comment on any aspect of the skill or report. For each item, explain what you observed, why it matters, and what you recommend changing. If you stopped the run early, explain where and why. Write the review yourself, without AI assistance.
+
+3. **Share your review.** Open a GitHub Issue in the assigned student's Homework 7 repository containing your review. Copy the same review into your Homework 8 submission report and include a link to the GitHub Issue.
+
+### (1) Assigned student's skill execution
+
+The assigned student's skill was copied into peer-review/SKILL.md. Its wording and instructions were preserved; PDF line wrapping and page numbering were removed to recover a usable Markdown file. The original PDF and its text extraction are retained in the same folder.
+
+The explicit invocation was:
+
+> Read and follow homework/week-08/peer-review/SKILL.md while analyzing homework/week-08/data/saheart.csv. The response is chd (0 or 1). Use all nine other variables as numerical predictors: sbp, tobacco, ldl, adiposity, famhist, typea, obesity, alcohol, and age. Code famhist as Absent = 1 and Present = 2, as in Homework 7.
+
+This invocation supplies data and coding, without additional preferences about methods, figures, selection, or report style. The agent followed the skill to produce a one-page analysis report.
+
+The run used seed **20261018**, a stratified split of **346 training / 116 test** observations, and the same five stratified folds for all **18 candidates**. It selected **PCA-LDA with 7 components**, with mean CV error **0.2512**. After refitting, its reserved-test error was **33/116 = 0.2845**. The confusion matrix, with observed classes in rows and predicted classes in columns, was
+
+$$
+\begin{array}{c|rr}
+ & \widehat y=0 & \widehat y=1\\\hline
+y=0 & 63 & 13\\
+y=1 & 20 & 20
+\end{array}.
+$$
+
+These numbers describe this independent skill run, rather than reproducing the author's random split. 
+
+**Execution record.** An initial attempt failed during the first LDA fit because the local SciPy DLL dependencies were not on the process search path. After correcting the environment, the successful script completed in **11.49 seconds**, including imports, 90 CV fits, the final fit, and report generation. This is script execution time, not total conversation or setup time. No early-stop or steer message was used. Exact agent-token usage and weekly-quota consumption were not exposed to the run.
+
+### (2) Student-written peer review
+
+Overall assessment: The skill provides a clear workflow for comparing LDA and QDA models while separating model selection from final evaluation. Its strongest features are the explicit leakage controls, shared cross-validation folds, and requirement to evaluate the selected model only once on an untouched test set. The supplied skill-generated report includes the required methods, CV results, selection figure, test error, and confusion matrix within one page. Both the original report and the new report select seven-component PCA-LDA. However, several aspects could be improved.
+
+1. Define more precise default analysis settings.
+
+The skill requests “reasonable” PCA candidates, a test fraction of approximately 20–25%, and stratified cross-validation, but leaves the component range, number of folds, and default seed unspecified. The original analysis used seed 43207 and 2–8 PCs, whereas the generated report used seed 20261018 and 1–8 PCs. Their test sets also contained 115 and 116 observations, respectively.
+
+These choices are allowed by the skill, but they make independent runs harder to compare and prevent the reported performance difference from being attributed to any single cause. I recommend specifying default settings, including the split fraction, CV folds, PCA candidate range, tie-breaking rule, and seed, while allowing explicit overrides. Saving the split and fold assignments, runnable code, and software versions would further improve reproducibility.
+
+2. Assess selection uncertainty before interpreting small CV improvements.
+
+The original report selects PCA-LDA with CV error 0.262, compared with 0.265 for five-component PCA-LDA and 0.268 for six-component PCA-LDA. The generated report also selects seven components, with error 0.251 versus 0.263 for six components. Neither report quantifies the variability of these comparisons.
+
+Small differences may reflect the particular validation folds rather than a reliable advantage. Although the reports acknowledge uncertainty, the original explanation that PCA reduced estimation noise is stronger than these results alone establish. I recommend reporting paired fold-level differences or results from repeated stratified CV, using only the training data. The skill could also define a practical near-tie rule favoring a simpler model when performance is similar. The final test set should remain untouched throughout this process.
+
+3. Make class-specific performance and the baseline explicit.
+
+The reports appropriately include confusion matrices and mention class-1 sensitivity. However, sensitivity is only 22/40 = 0.55 in the original report and 20/40 = 0.50 in the generated report. Thus, the selected models miss approximately half of the positive cases despite having substantially lower overall error.
+
+Because the dataset contains 302 class-0 and 160 class-1 observations, overall misclassification alone does not fully describe predictive performance. I recommend requiring a compact summary of sensitivity, specificity, balanced accuracy, and a majority-class baseline. For example, the generated report has sensitivity 0.500, specificity 63/76 = 0.829, and balanced accuracy approximately 0.664. These additions would make the model’s strengths and limitations easier to assess without changing the prescribed model-selection metric.
+
+### (3) GitHub Issue
+
+https://github.com/jacobjacobsonsq-cloud/stat432-fall2026/issues/3
