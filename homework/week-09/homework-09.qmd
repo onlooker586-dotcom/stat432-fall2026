@@ -1,0 +1,346 @@
+---
+title: "Homework 09"
+pagetitle: "Homework 09"
+body-classes: "lecture-page practice-page"
+format:
+  html:
+    embed-resources: true
+    html-math-method: mathml
+    page-layout: full
+    toc: true
+    toc-location: body
+    toc-title: "On this page"
+    toc-depth: 2
+    code-fold: true
+    code-summary: "Show the workflow"
+    css: report.css
+---
+
+The kernel-tuning question moved here from Homework 08. A solution for Question 1 will be available after Monday, October 26, 2026. No solution will be provided for Question 2.
+
+## Question 1: Choosing an SVM kernel
+
+Use `saheart.csv` from the combined ZIP. As in Homework 7, predict `chd` using the same nine predictors, coding `famhist` as 1 for `Absent` and 2 for `Present`.
+
+Compare SVMs with a linear kernel, polynomial kernels of degrees 2 (quadratic), 3, and 4, and a radial basis kernel. Choose **no more than 20 candidate settings in total** across these kernels. Vary the cost $C$ for each kernel and the radial scale $\gamma$ for the radial kernel. State any other kernel settings you hold fixed.
+
+Divide the observations into five folds yourself and use the same folds for all candidates. Standardize predictors using only the fitting observations in each fold. Report the candidate settings and their mean cross-validation misclassification rates. Which kernel and settings do you prefer? Give a brief justification.
+
+### (a) Candidate settings and shared folds
+
+I use all **462 observations**, with `chd` as the response and the nine other
+variables as predictors. `famhist` is coded Absent = 1 and Present = 2. There
+are no missing values. The random seed is **20261025**.
+
+Before fitting, I specify exactly **20 candidate settings**:
+
+| Kernel | Cost $C$ | Other settings | Candidates |
+|:--|:--|:--|--:|
+| Linear | $0.1,1,10$ | No additional kernel parameters | 3 |
+| Polynomial | $0.1,1,10$ for each degree | $d=2,3,4$, $\gamma=1/9$, $r=1$ | 9 |
+| Radial basis | $0.1,1,10,100$ | $\gamma=0.01,0.1$ | 8 |
+
+For standardized predictor vectors $\mathbf z,\mathbf z'$, the kernels are
+
+$$
+K_{\mathrm{linear}}(\mathbf z,\mathbf z')=\mathbf z^{\mathsf T}\mathbf z',
+\quad K_{\mathrm{poly}}(\mathbf z,\mathbf z')=(\gamma\mathbf z^{\mathsf T}\mathbf z'+r)^d,
+\quad K_{\mathrm{RBF}}(\mathbf z,\mathbf z')=\exp(-\gamma\|\mathbf z-\mathbf z'\|^2).
+$$
+
+I hold polynomial `coef0` ($r$) at 1, use uniform class weights, disable
+probability fitting, and set the numerical tolerance to $10^{-4}$.
+`shrinking=True`, `cache_size=200`, and `max_iter=-1` are fixed. The
+polynomial offset allows lower-order terms as well as degree-$d$ terms;
+RBF has no offset or degree parameter. These definitions follow the
+[SVC parameterization](https://scikit-learn.org/stable/modules/generated/sklearn.svm.SVC.html).
+
+I construct the folds myself: shuffle row indices separately within each
+class and allocate them cyclically to folds 1 through 5. This gives fold
+sizes **93, 93, 92, 92, 92**, each containing 32 positive observations.
+The same assignments are used for every candidate. In each fold I estimate
+predictor means and standard deviations using only the other four folds,
+with divisor equal to their combined sample size, and apply those values
+unchanged to the validation fold.
+
+```{python}
+#| label: hw9-q1a-python
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from IPython.display import display
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+
+seed = 20261025
+heart = pd.read_csv("data/saheart.csv")
+heart["famhist"] = heart["famhist"].map({"Absent": 1, "Present": 2})
+X = heart.drop(columns="chd").to_numpy(dtype=float)
+y = heart["chd"].to_numpy(dtype=int)
+assert X.shape == (462, 9) and np.isfinite(X).all()
+
+# Construct the stratified folds directly, without a CV splitter.
+rng = np.random.default_rng(seed)
+fold = np.full(len(y), -1, dtype=int)
+for cls in np.unique(y):
+    indices = np.flatnonzero(y == cls)
+    rng.shuffle(indices)
+    fold[indices] = np.arange(len(indices)) % 5
+fold_table = pd.crosstab(fold + 1, y)
+fold_table.index.name = "Validation fold"
+fold_table.columns = ["chd = 0", "chd = 1"]
+display(fold_table)
+
+candidates = [{"kernel": "linear", "C": c} for c in [0.1, 1, 10]]
+candidates += [
+    {"kernel": "poly", "C": c, "degree": d, "gamma": 1/9, "coef0": 1}
+    for d in [2, 3, 4] for c in [0.1, 1, 10]
+]
+candidates += [
+    {"kernel": "rbf", "C": c, "gamma": g}
+    for c in [0.1, 1, 10, 100] for g in [0.01, 0.1]
+]
+assert len(candidates) == 20
+
+rows = []
+for number, setting in enumerate(candidates, 1):
+    errors = []
+    for f in range(5):
+        fit, valid = fold != f, fold == f
+        model = make_pipeline(
+            StandardScaler(),
+            SVC(**setting, class_weight=None, probability=False,
+                tol=1e-4, shrinking=True, cache_size=200, max_iter=-1),
+        )
+        model.fit(X[fit], y[fit])
+        assert model.named_steps["svc"].fit_status_ == 0
+        errors.append(np.mean(model.predict(X[valid]) != y[valid]))
+    rows.append({"candidate": number, **setting,
+                 **{f"fold_{j+1}": e for j, e in enumerate(errors)},
+                 "mean_error": np.mean(errors),
+                 "se": np.std(errors, ddof=1) / np.sqrt(5)})
+cv = pd.DataFrame(rows)
+```
+
+### (b) Cross-validation results
+
+For candidate $s$, I report the unweighted mean of the five fold error rates,
+
+$$
+\overline e_s=\frac{1}{5}\sum_{k=1}^5
+\frac{\sum_{i\in V_k}I\{\widehat y_i^{(-k,s)}\ne y_i\}}{|V_k|}.
+$$
+
+I also show $s_e/\sqrt{5}$, where $s_e$ is the sample standard deviation of
+the five errors. This is a descriptive measure of fold variability, not a
+valid independent-sample confidence interval, because the fitting sets overlap.
+Six decimal places retain the small differences between near-tied candidates.
+
+```{python}
+#| label: hw9-q1b-python
+shown = cv[["candidate", "kernel", "C", "degree", "gamma", "mean_error", "se"]].copy()
+display(shown.style.hide(axis="index").format({
+    "C": "{:g}", "degree": "{:.0f}", "gamma": "{:.5f}",
+    "mean_error": "{:.6f}", "se": "{:.4f}",
+}, na_rep="--").highlight_min(subset=["mean_error"], color="#fce4d6"))
+```
+
+```{python}
+#| label: hw9-q1-figure
+#| fig-width: 7
+#| fig-height: 4.4
+#| fig-alt: "Shared-fold mean CV errors versus cost for linear, degree-two through degree-four polynomial, and two RBF scales. RBF with C=1 and gamma=0.01 has the minimum error."
+fig, ax = plt.subplots(figsize=(7, 4.4))
+groups = [(cv.kernel == "linear", "Linear", "black", "o")]
+for d, color, marker in [(2, "#0072B2", "s"), (3, "#E69F00", "^"), (4, "#CC79A7", "D")]:
+    groups.append(((cv.kernel == "poly") & (cv.degree == d), f"Polynomial d={d}", color, marker))
+for g, color, marker in [(0.01, "#009E73", "v"), (0.1, "#D55E00", "P")]:
+    groups.append(((cv.kernel == "rbf") & (cv.gamma == g), f"RBF gamma={g}", color, marker))
+for mask, label, color, marker in groups:
+    group = cv.loc[mask]
+    ax.plot(group.C, group.mean_error, marker=marker, color=color, label=label)
+winner = cv.loc[cv.mean_error.idxmin()]
+ax.scatter([winner.C], [winner.mean_error], s=180, facecolors="none",
+           edgecolors="black", zorder=5)
+ax.set_xscale("log")
+ax.set_xticks([0.1, 1, 10, 100], ["0.1", "1", "10", "100"])
+ax.set(xlabel="Cost C", ylabel="Mean CV misclassification rate",
+       title="Twenty candidate settings on the same five folds")
+ax.grid(alpha=0.2)
+ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.20), fontsize=9, ncol=3)
+fig.tight_layout()
+plt.show()
+```
+
+### (c) Preferred kernel and interpretation
+
+Using minimum mean CV error as the predeclared selection rule, I prefer the
+**RBF kernel with $C=1$ and $\gamma=0.01$**, whose mean error is
+**0.268420**. At $\gamma=0.01$, increasing $C$ to 100 gives **0.268467**,
+essentially the same result. Both settings make 124 out-of-fold errors; the
+tiny difference in their mean fold rates comes from the unequal fold sizes.
+The smaller cost is also the less aggressive fit among these two settings.
+
+The best quadratic fit has error **0.270594** ($C=0.1$), and the best linear
+fit has error **0.272814** ($C=0.1$). Their gaps from the minimum are small,
+so this comparison does not establish a reliable advantage for nonlinearity.
+The degree-four polynomial with $C=10$ performs substantially worse
+(**0.365965**). Increased flexibility is therefore not automatically helpful.
+
+These results select a candidate among the stated grid. The minimum is a
+tuning result from these data, **not an independent estimate of the final
+selected model's generalization error**. Question 2 uses nested CV to evaluate
+its separately specified model-selection procedure.
+
+## Question 2: Write and use a short SVM analysis skill
+
+In Homework 8, you reviewed another student's skill. Review the comments and suggestions you received on your own Homework 7 skill. Use what you learned from both sides of the peer review to write a new, shorter skill for SVM model fitting.
+
+**Write the skill by hand.** Create a `SKILL.md` with a short name and description in YAML frontmatter. Write the entire file yourself, without asking AI to draft or edit it. The instruction body after the closing `---` of the frontmatter must be **no more than 50 lines**, including blank lines. Keep the skill independent of any particular dataset, variable names, or observed results, and load it only when you explicitly invoke it.
+
+Your skill should direct the agent to:
+
+1. judge whether the data are suitable for an SVM analysis;
+2. choose which kernels to consider and explain why;
+3. identify tuning parameters and a method for tuning them;
+4. choose an evaluation method that supports selecting a final model;
+5. require a compact figure and table that justify the choices;
+6. interpret the fit and report the key numerical results; and
+7. prioritize the evidence needed to justify the final model in **no more than one printed page at 11-point font**.
+
+**Apply the skill.** Explicitly invoke your skill to analyze `saheart.csv`, using the same response, nine predictors, and `famhist` coding as in Question 1. Provide these data details when invoking the skill, not in the skill itself. Let the skill guide the analysis, then check the resulting report and calculations.
+
+**Submit the results.** Include the one-page, 11-point analysis report in your Homework 09 submission and append the complete contents of your `SKILL.md` afterward. The appended skill is outside the one-page limit.
+
+### (a) Lessons from the peer reviews and skill design
+
+The [review of my Homework 7 skill](https://github.com/onlooker586-dotcom/stat432-fall2026/issues/4) recommended specifying the folds and tuning grid and reporting uncertainty instead of treating small CV differences as decisive. In
+[my review of the assigned student's skill](https://github.com/jacobjacobsonsq-cloud/stat432-fall2026/issues/3), I also emphasized reproducible settings, selection uncertainty, and class-specific performance relative to a majority-class baseline. I used these suggestions to make the new skill more precise:
+
+- Fix a default seed, five-fold stratification, and a small explicit tuning grid;
+  preserve row assignments, code, software versions, and fold-level errors.
+- Use nested CV to evaluate the selection procedure and a stated one-SE
+  simplicity heuristic for near ties. Report fold variability while explaining
+  why it is not a formal significance test.
+- Include the majority baseline, confusion counts, sensitivity, specificity,
+  and balanced accuracy alongside overall error.
+
+### (b) Explicit invocation and execution
+
+The invocation was:
+
+> Read and explicitly use homework/week-09/svm-brief/SKILL.md to analyze homework/week-09/data/saheart.csv. Predict chd (0/1) using sbp, tobacco, ldl, adiposity, famhist, typea, obesity, alcohol, and age. Code famhist as Absent=1 and Present=2. Treat chd=1 as the positive class.
+
+The skill directed the analysis. Its default linear and RBF candidates were
+specified **before either question's results were computed**, rather than
+chosen from the Question 1 rankings. The record is
+[analysis/design.md](analysis/design.md). Five outer folds evaluate the whole
+selection rule; each outer fitting subset has its own five inner folds.
+After evaluation, the same rule is applied to all observations and the chosen
+model is refitted. This separation follows the purpose of
+[nested cross-validation](https://scikit-learn.org/stable/auto_examples/model_selection/plot_nested_cross_validation_iris.html).
+
+The final one-SE choice differs from Question 1's minimum-error choice because
+the folds, search grid, and selection rules are specified separately. It is
+not evidence that one report contradicts the other. The one-SE heuristic
+deliberately permits a slightly higher tuning error in exchange for simplicity.
+
+The analysis uses Python 3.10.20, NumPy 2.2.6, pandas 2.3.3, and scikit-learn
+1.7.2. Runnable code is in [analysis/svm_workflow.py](analysis/svm_workflow.py).
+The saved [inner-fold results](analysis/q2-inner-cv-results.csv),
+[outer-fold results](analysis/q2-outer-results.csv),
+[outer predictions](analysis/q2-outer-predictions.csv), and
+[full-data tuning table](analysis/q2-final-cv-results.csv) make the reported
+calculations reproducible. The code constructing this page is separate from
+the statistical code, so layout changes do not refit or retune the models.
+
+### (c) One-page analysis report
+
+The report below uses 11-point text, including its table and figure labels.
+An exact one-page PDF is also available as [svm-report.pdf](analysis/svm-report.pdf).
+
+:::::: {.svm-report}
+
+**SAheart: SVM selection and evaluation**
+
+**Data and scope.** The data contain 462 observations and nine numerical predictors; `chd = 1` is the positive class (160/462). I coded `famhist` as Absent = 1 and Present = 2. There are no missing or duplicate rows, and the predictor rank is 9. SVM is feasible after scaling, treating rows as independent. Linear models provide a simple boundary; RBF allows smooth nonlinear effects. No specified polynomial structure justifies additional degrees.
+
+**Design and tuning.** I used seed **43209**, five stratified outer folds, and five shared inner folds. Scaling was fitted only on fitting rows. The 12 settings use $C\in\{0.1,1,10\}$ and, for RBF, $\gamma\in\{0.01,0.1,1\}$, with uniform class weights, no probability fitting, and tolerance $10^{-4}$. The one-SE rule prefers linear models, then smaller $C$ and $\gamma$, among eligible candidates. Selection is repeated inside each outer fold without tuning on outer results.
+
+::::: {.svm-report-evidence}
+
+:::: {.svm-report-table}
+
+| Kernel; $C$, $\gamma$ | CV error | SE |
+|:--|--:|--:|
+| **Linear; 0.1 (+)** | **0.2813** | **0.0193** |
+| Linear; 1 | 0.2835 | 0.0176 |
+| Linear; 10 | 0.2835 | 0.0176 |
+| RBF; 0.1, 0.01 | 0.3463 | 0.0009 |
+| RBF; 0.1, 0.1 | 0.3442 | 0.0028 |
+| RBF; 0.1, 1 | 0.3463 | 0.0009 |
+| **RBF; 1, 0.01 (\*)** | **0.2748** | **0.0122** |
+| RBF; 1, 0.1 | 0.2769 | 0.0177 |
+| RBF; 1, 1 | 0.3528 | 0.0086 |
+| RBF; 10, 0.01 | 0.2770 | 0.0172 |
+| RBF; 10, 0.1 | 0.2878 | 0.0240 |
+| RBF; 10, 1 | 0.3636 | 0.0115 |
+
+::::
+
+:::: {.svm-report-figure}
+
+![](analysis/q2-selection.svg){width=3.6in fig-alt="Mean CV errors for linear and RBF candidates; the dashed line marks the one-SE cutoff, the star marks the minimum, and the circle marks the selected model."}
+
+::::
+
+:::::
+
+All-data tuning results: **\*** marks the minimum; **+** marks the selected model. The dashed line is the one-SE cutoff. The complete results are in [q2-final-cv-results.csv](analysis/q2-final-cv-results.csv).
+
+**Selected fit.** RBF with $C=1$ and $\gamma=0.01$ has minimum CV error **0.2748**. The one-SE cutoff is **0.2871** (minimum plus SE 0.0122). Linear SVM with **$C=0.1$** qualifies (0.2813) and is selected and refitted on all 462 rows, with **283 support vectors**. All five outer selections also chose linear SVM with $C=0.1$.
+
+**Nested evaluation.** The procedure makes **130/462 errors (0.2814)**, versus **160/462 (0.3463)** for the majority baseline, an improvement of **6.49 percentage points**. With observed classes in rows and predicted classes in columns (0, 1), the confusion counts are $(253,49)$ for class 0 and $(81,79)$ for class 1. Sensitivity is **0.4938**, specificity **0.8377**, and balanced accuracy **0.6657**.
+
+**Interpretation and limitations.** The simpler eligible model is preferred; small CV differences do not establish nonlinear superiority. It misses **81/160 positives**. The outer-fold error SD is **0.0432**. SE is fold SD divided by $\sqrt{5}$; overlapping fitting sets make the one-SE rule a heuristic, not a significance test. Nested predictions evaluate the selection procedure, not the final full-data fit on independent new data. Previous coursework used these data, so external validation remains necessary. No fitting warnings occurred.
+
+::::::
+
+### (d) Complete SKILL.md
+
+```markdown
+---
+name: svm-brief
+description: Fit and evaluate SVM classifiers and produce a one-page report; use only when explicitly invoked with data, response, and predictor details.
+---
+# SVM analysis
+
+## Suitability and design
+- Confirm the target, predictor coding, sample size, class counts, missingness, and dependence or leakage risks.
+- Explain whether sample size, numeric encoding, scaling, and class imbalance make SVM classification reasonable; do not silently change the target.
+- Use seed 43209 unless supplied otherwise; record software versions, row assignments, code, and candidate results.
+- Start with linear and RBF kernels: a simple boundary versus smooth nonlinear effects; add polynomial kernels only with a stated reason.
+- Before fitting, list at most 20 settings: default C in {0.1, 1, 10}; RBF gamma in {0.01, 0.1, 1}; optional polynomial degrees 2 and 3.
+- Hold class weights uniform, probability fitting off, and other kernel settings explicit; choose any justified overrides before evaluation.
+
+## Selection and evaluation
+- Default to five outer and five inner stratified folds; if class counts or dependence prevent this, explain and predeclare a suitable alternative.
+- Construct shuffled folds with the seed; share validation folds across all candidates; use only outer-training rows to construct inner folds.
+- Fit imputation, encoding learned from data, and standardization inside each fitting fold; apply fitted transforms unchanged to validation rows.
+- Compare mean validation misclassification; retain each fold's error and report its descriptive SE (sample SD divided by sqrt(folds)).
+- Use a one-SE heuristic: retain candidates within the minimum mean plus that candidate's SE; prefer linear, then polynomial by degree, then RBF, then smaller C and gamma.
+- State that correlated CV folds make this SE and simplicity ordering heuristics, not confidence intervals or significance tests.
+- Repeat selection inside each outer-training set, refit there, and predict each outer-validation row once; do not revise the grid from outer results.
+- Report pooled outer error, observed-by-predicted confusion counts, majority-baseline error, and binary sensitivity, specificity, and balanced accuracy (name the positive class).
+- Separately run the same selection procedure on all data and refit the final model; distinguish its tuning scores from evaluation of the selection procedure.
+- Report fitting failures or convergence warnings; never present a failed fit as valid evidence.
+
+## Deliverable
+- Produce at most one printed page at 11-point font, including labels, table text, and captions; shorten content instead of shrinking text.
+- Include suitability, kernel rationale, split/seed, grid and selection rule, final settings, and key evaluation numbers.
+- Include one compact candidate-error table and one figure directly supporting selection; mark the minimum and selected model when different.
+- Interpret numerical gains against the baseline, class-specific weaknesses, fold variability, and limits of the evaluation; avoid causal or probability claims from scores.
+- Keep runnable code and detailed fold records outside the page; inspect the rendered page and reconcile its numbers with saved predictions.
+```
