@@ -1,0 +1,469 @@
+---
+title: "Homework 10"
+pagetitle: "Homework 10"
+body-classes: "lecture-page practice-page"
+format:
+  html:
+    embed-resources: true
+    html-math-method: mathml
+    page-layout: full
+    toc: true
+    toc-location: body
+    toc-title: "On this page"
+    toc-depth: 2
+    code-fold: true
+    code-summary: "Show the workflow"
+---
+
+```{r}
+#| label: hw10-setup
+#| include: false
+if (dir.exists(".r-library")) .libPaths(c(normalizePath(".r-library"), .libPaths()))
+q1 <- readRDS("analysis/q1-results.rds")
+q2 <- readRDS("analysis/q2-results.rds")
+node_results <- q1$summary[q1$summary$mtry == 3, ]
+node_results <- node_results[order(node_results$nmin), ]
+mtry_results <- q1$summary[q1$summary$nmin == 10, ]
+mtry_results <- mtry_results[order(mtry_results$mtry), ]
+selected <- q2$grid[q2$chosen, ]
+vi <- q2$importance
+vi_ranked <- vi[order(-vi$importance), ]
+oob_saved <- read.csv("analysis/q2-oob-predictions.csv")
+```
+
+Solutions for Questions 1 and 2 will be available after Monday, November 2, 2026. No solution will be provided for Question 3.
+
+Use the RLT package for Questions 1 and 2: `RLT` in R or `rlt` in Python. The node-size parameter is `nmin` in R and `min_samples_leaf` in Python; both stop splitting a node when it contains at most that many observations. The candidate-predictor parameter is `mtry` in both languages. Use ordinary random forests, with reinforcement turned off.
+
+## Question 1: Bias-variance trade-off simulation
+
+Two important tuning parameters of random forests are node size and `mtry`. We have performed some preliminary analysis in class. The goal of this question is to perform a larger simulation study for these two tuning parameters.
+
+Consider a regression model with five jointly normally distributed predictors. Each predictor has mean 0 and variance 1, and the correlation between any two different predictors is 0.3. The response is
+
+$$
+Y=X_1+X_3+X_5+\varepsilon,
+\qquad \varepsilon\sim N(0,1),
+$$
+
+where the noise is independent of the predictors. Thus the true regression function is $f(\mathbf{x})=x_1+x_3+x_5$.
+
+a. Set up a simulation study with 100 repetitions. Generate 200 test predictor vectors once and keep them fixed. In each repetition, generate 200 new training observations and use the same training data for all tuning settings. Fit 500-tree forests, drawing 200 observations with replacement for each tree. Make the following two comparisons:
+
+   - Fix `mtry` at 3 and vary node size over $1,5,10,20,30$.
+   - Fix node size at 10 and vary `mtry` over $1,2,3,4,5$.
+
+   Leave all other fitting parameters at their defaults. Record the predictions at each test point across repetitions. For each setting, estimate the squared bias and variance at each test point, then average them over the 200 test points. Compare predictions with $f(\mathbf{x})$ when estimating bias. Produce two figures, one for each tuning parameter, showing the averaged squared bias and variance. Set a random seed and report it.
+
+b. Discuss your results in terms of the bias-variance trade-off:
+
+   - How does a large node size, such as 30, affect the fit in this example?
+   - What are the benefits and drawbacks of using a large `mtry` value?
+   - If each tree instead sampled 100 observations with replacement, would you expect the preferred node size to shift toward smaller or larger values? Explain your reasoning. You may use an additional simulation to help, but a particular pattern is not guaranteed.
+
+### (a) Simulation design and estimates
+
+I use **R 4.6.1 and RLT 6.1.1**, with seed **20261101**. The covariance matrix is
+$\boldsymbol\Sigma=0.7\mathbf I_5+0.3\mathbf 1\mathbf 1^{\mathsf T}$.
+I generate one set of 200 test predictors and keep it fixed. All 100 training
+samples are generated before fitting, so the forest's random-number use cannot
+change the training data. Each sample contains 200 observations, and all
+settings in a repetition share exactly the same predictors and responses.
+
+There are **nine distinct settings**: the two requested comparisons share
+`nmin = 10, mtry = 3`, which is fitted once per repetition and reused. Each
+forest has 500 trees and uses a 200-draw bootstrap sample per tree
+(`resample.prob = 1`, `resample.replace = TRUE`). Reinforcement is off.
+All other statistical fitting parameters retain their defaults, including
+axis-aligned splits, `alpha = 0`, and `nsplit = 0` (best split search).
+I use one computational core and forest seed $20261101+b$ in repetition $b$.
+
+In RLT, `nmin` is the threshold at which a node stops splitting; it is not a
+guaranteed minimum number of observations in every terminal node. The defaults
+and parameter meanings were checked against the installed package and
+[RLT documentation](https://teazrq.github.io/RLT/reference/RLT.html).
+
+```{r}
+#| label: hw10-q1-simulation
+#| eval: false
+library(RLT)
+seed <- 20261101L
+set.seed(seed)
+B <- 100L
+n <- 200L
+p <- 5L
+Sigma <- matrix(0.3, p, p)
+diag(Sigma) <- 1
+L <- chol(Sigma)
+draw_x <- function() matrix(rnorm(n * p), n, p) %*% L
+
+Xtest <- draw_x()
+truth <- rowSums(Xtest[, c(1, 3, 5)])
+training <- replicate(B, {
+  x <- draw_x()
+  list(x = x, y = rowSums(x[, c(1, 3, 5)]) + rnorm(n))
+}, simplify = FALSE)
+settings <- unique(rbind(
+  data.frame(nmin = c(1L, 5L, 10L, 20L, 30L), mtry = 3L),
+  data.frame(nmin = 10L, mtry = 1:5)))
+
+# Dimensions: fixed test points x repetitions x distinct settings.
+predictions <- array(NA_real_, c(n, B, nrow(settings)))
+for (b in seq_len(B)) {
+  for (s in seq_len(nrow(settings))) {
+    fit <- RLT(training[[b]]$x, training[[b]]$y, model = "regression",
+      ntrees = 500, nmin = settings$nmin[s], mtry = settings$mtry[s],
+      resample.prob = 1, resample.replace = TRUE,
+      reinforcement = FALSE, ncores = 1, seed = seed + b)
+    predictions[, b, s] <- as.numeric(predict(fit, Xtest)$Prediction)
+  }
+}
+```
+
+For each setting $s$ and fixed test point $\mathbf x_j$, let
+$\overline f_s(\mathbf x_j)=B^{-1}\sum_{b=1}^B\widehat f_s^{(b)}(\mathbf x_j)$.
+The estimates reported below are
+
+$$
+\widehat{\mathrm{Bias}^2}_s
+=\frac{1}{200}\sum_{j=1}^{200}
+\left\{\overline f_s(\mathbf x_j)-f(\mathbf x_j)\right\}^2,
+\qquad
+\widehat{\mathrm{Var}}_s
+=\frac{1}{200}\sum_{j=1}^{200}\frac{1}{100}\sum_{b=1}^{100}
+\left\{\widehat f_s^{(b)}(\mathbf x_j)-\overline f_s(\mathbf x_j)\right\}^2.
+$$
+
+Variance uses divisor **100**. I average the squared pointwise biases, rather
+than squaring an overall average bias that could cancel positive and negative
+errors. With this divisor, squared bias plus variance equals the empirical
+MSE against $f(\mathbf x)$ exactly up to rounding. This excludes new response
+noise; expected squared prediction error against a fresh $Y$ also includes
+the irreducible variance 1. The estimated variance includes both changing
+training samples and the randomness of the finite, 500-tree forests.
+
+```{r}
+#| label: hw10-q1-estimation
+#| eval: false
+for (s in seq_len(nrow(settings))) {
+  pred <- predictions[, , s]
+  average <- rowMeans(pred)
+  bias2 <- (average - truth)^2
+  variance <- rowMeans((pred - average)^2)
+  mse_f <- rowMeans((pred - truth)^2)
+  stopifnot(max(abs(mse_f - bias2 - variance)) < 1e-10)
+  print(c(nmin = settings$nmin[s], mtry = settings$mtry[s],
+          bias2 = mean(bias2), variance = mean(variance), MSE_f = mean(mse_f)))
+}
+```
+
+**Node-size comparison, with `mtry = 3`.**
+
+```{r}
+#| label: hw10-q1-node-table
+#| echo: false
+knitr::kable(node_results, digits = 4, row.names = FALSE,
+  col.names = c("Node size", "mtry", "Squared bias", "Variance", "MSE against f"))
+```
+
+![Averaged squared bias and variance as the node-size threshold changes, with mtry fixed at 3.](figures/q1-node-size.svg){width=6.8in}
+
+**Candidate-predictor comparison, with `nmin = 10`.**
+
+```{r}
+#| label: hw10-q1-mtry-table
+#| echo: false
+knitr::kable(mtry_results, digits = 4, row.names = FALSE,
+  col.names = c("Node size", "mtry", "Squared bias", "Variance", "MSE against f"))
+```
+
+![Averaged squared bias and variance as mtry changes, with node size fixed at 10.](figures/q1-mtry.svg){width=6.8in}
+
+The simulation code was executed separately and its full prediction array was
+saved in [q1-results.rds](analysis/q1-results.rds). Rendering reads those saved
+results rather than rerunning 900 forests. The runnable functions are in
+[workflow.R](analysis/workflow.R), with execution instructions in
+[analysis/README.md](analysis/README.md).
+
+### (b) Bias-variance interpretation
+
+In the node-size comparison, increasing `nmin` from 1 to 30 raises squared
+bias from **0.1225 to 0.2236** and lowers variance from **0.1982 to 0.1595**.
+The lowest estimated MSE against $f$ among these settings is **0.3104 at
+`nmin = 10`**. With node size fixed at 10, increasing `mtry` from 1 to 5
+lowers squared bias from **0.3550 to 0.1172**, but raises variance from
+**0.1112 to 0.2259**. The smallest MSE in this comparison occurs at
+**`mtry = 3`**. These are empirical preferences for this simulation, not
+universal optimal settings.
+
+**Large node size.** A threshold of 30 stops splitting sooner and creates
+coarser local averages. Even though the true regression function is linear,
+an ordinary forest approximates it through axis-aligned, piecewise-constant
+trees. Coarse regions average over observations with different true means,
+especially near the extremes, increasing smoothing bias. More observations
+contribute to typical leaf averages, which can reduce variance. The
+[forest-kernel viewpoint](https://teazrq.github.io/stat432rpy/topics/random-forests/forest-kernels-and-adaptiveness.html)
+describes this as changing the data-dependent neighborhoods used in prediction.
+
+**Large mtry.** Considering more predictors makes it easier to find a useful
+split, but it can make different trees select similar splits, reducing the
+variance reduction obtained from averaging. Here three of five predictors
+enter $f$ directly. The probability that a candidate set contains at least
+one of them is $1-\binom{2}{m}/\binom{5}{m}$ for $m\leq2$, and 1 for
+$m\geq3$. This equals 0.6 for `mtry = 1` and 0.9 for `mtry = 2`.
+The other two variables are correlated proxies, not independent noise:
+for example, $\operatorname{Cov}(X_2,Y)=0.9$ even though $X_2$ has no direct
+term in $f$. The useful balance is stronger individual trees versus more
+similar trees, not simply maximizing or minimizing tree correlation. This
+is the trade-off discussed in the
+[random-forest lecture](https://teazrq.github.io/stat432rpy/topics/random-forests/random-forests.html#effect-of-candidate-predictors).
+
+**Sampling 100 observations per tree.** My initial expectation is that the
+preferred node-size threshold could shift **smaller**: the same threshold
+would be larger relative to a tree's reduced sample size and could stop its
+partition too early. A smaller threshold can partially recover locality.
+Sampling 100 rather than 200 times from 200 observations also reduces the
+expected number of distinct in-bag observations from approximately 126.6 to
+78.8. This makes individual trees noisier and can favor more smoothing,
+while altered tree correlation changes the benefit of averaging. These
+competing effects mean the direction is not guaranteed; I would retune
+node size under the new sampling fraction rather than assume a universal
+rule. No additional 100-draw simulation is claimed here.
+
+## Question 2: Tuning random forests for MNIST
+
+Use `mnist-first2000.csv.gz` from the combined ZIP. It contains 2,000 MNIST observations, with the digit label `Digit` and 784 pixel values.
+
+- From the first 1,000 observations, keep digits 1, 6, and 7 as the training data. From the remaining 1,000 observations, keep the same digits as the test data.
+- Fit PCA to the training pixels, centering but not scaling them. Use the first 20 principal components as predictors, and project the test observations using the same training means and loadings.
+
+Complete the following tasks using RLT classification forests with 1,000 trees. For each tree, draw a bootstrap sample of the same size as the training set.
+
+a. Fit a random forest with the default `mtry` and node-size settings. Report the out-of-bag (OOB) misclassification rate.
+
+b. Construct a grid of `mtry` and node-size values to tune the model. Select the setting using OOB misclassification rate. Report the OOB error for each setting and the selected values. Calculate and present the selected forest's OOB permutation variable importance for the 20 principal components. Comment on your results.
+
+c. Apply the selected model to the test data and report the misclassification rate and confusion matrix. Use the test labels only for this final assessment.
+
+### Data preparation: training-only PCA
+
+I use the prescribed row split and digit filter, retaining
+**`r length(q2$train_rows)` training observations** and
+**`r length(q2$test_rows)` test observations**. The test labels are used for
+the required population filter and then reserved until final assessment.
+I fit PCA to the training pixels with `center = TRUE, scale. = FALSE`, use
+its first 20 score columns, and apply the same center and loadings to test
+pixels. The first 20 PCs explain **`r sprintf('%.2f', 100 * sum(q2$explained_variance))`%**
+of training-pixel variance. Constant pixel columns do not require removal
+because PCA does not divide by their standard deviations.
+
+```{r}
+#| label: hw10-q2-pca
+#| eval: false
+raw <- read.csv(gzfile("data/mnist-first2000.csv.gz"))
+train_rows <- which(seq_len(nrow(raw)) <= 1000 & raw$Digit %in% c(1, 6, 7))
+test_rows <- which(seq_len(nrow(raw)) > 1000 & raw$Digit %in% c(1, 6, 7))
+X <- as.matrix(raw[train_rows, -1])
+y <- factor(raw$Digit[train_rows], levels = c(1, 6, 7))
+pca <- prcomp(X, center = TRUE, scale. = FALSE, rank. = 20)
+scores <- pca$x[, 1:20, drop = FALSE]
+colnames(scores) <- paste0("PC", 1:20)
+```
+
+### (a) Default forest and OOB error
+
+With 20 predictors, the RLT 6.1.1 defaults are **`mtry = 10`** and
+**`nmin = 5`**. I leave these two arguments unspecified in the default fit.
+All classification forests use 1,000 trees, a bootstrap sample of
+`r length(q2$train_rows)` draws per tree, reinforcement off, one computational
+core, and seed **20261102**. For a training observation, its OOB probabilities
+average only trees whose bootstrap samples excluded it; the largest average
+probability determines its predicted digit.
+
+```{r}
+#| label: hw10-q2-default
+#| eval: false
+default_fit <- RLT(scores, y, model = "classification", ntrees = 1000,
+  resample.prob = 1, resample.replace = TRUE,
+  reinforcement = FALSE, ncores = 1, seed = 20261102L)
+default_oob_error <- mean(default_fit$Prediction != y)
+```
+
+The default OOB misclassification rate is
+**`r sum(oob_saved$observed != oob_saved$default_oob)`/`r length(q2$train_rows)` = `r sprintf('%.4f', q2$default_error)`**
+(**`r sprintf('%.2f', 100 * q2$default_error)`%**).
+
+```{r}
+#| label: hw10-q2-default-result
+#| echo: false
+oob_saved <- read.csv("analysis/q2-oob-predictions.csv")
+knitr::kable(data.frame(mtry = 10, nmin = 5,
+  OOB_errors = sum(oob_saved$observed != oob_saved$default_oob),
+  Training_n = nrow(oob_saved), OOB_error = q2$default_error), digits = 4)
+```
+
+### (b) OOB tuning and permutation importance
+
+Before examining errors, I fix a **16-setting grid**:
+`mtry` in $\{2,5,10,20\}$ and `nmin` in $\{1,5,10,20\}$.
+It includes the default and ranges from strong feature randomization to
+bagging all 20 PCs, and from fine to coarser trees. I select the smallest
+OOB misclassification rate. Exact ties prefer larger node size, then
+smaller `mtry`. The grid and tie rule are not changed using test results.
+
+```{r}
+#| label: hw10-q2-grid
+#| eval: false
+grid <- expand.grid(mtry = c(2L, 5L, 10L, 20L), nmin = c(1L, 5L, 10L, 20L))
+fits <- vector("list", nrow(grid))
+for (s in seq_len(nrow(grid))) {
+  fit <- RLT(scores, y, model = "classification", ntrees = 1000,
+    mtry = grid$mtry[s], nmin = grid$nmin[s],
+    resample.prob = 1, resample.replace = TRUE,
+    reinforcement = FALSE, importance = TRUE, ncores = 1, seed = 20261102L)
+  grid$oob_errors[s] <- sum(fit$Prediction != y)
+  grid$oob_error[s] <- mean(fit$Prediction != y)
+  fits[[s]] <- fit
+}
+chosen <- order(grid$oob_error, -grid$nmin, grid$mtry)[1]
+selected_fit <- fits[[chosen]]
+importance <- data.frame(component = paste0("PC", 1:20),
+                         importance = RLT::importance(selected_fit)$VI)
+```
+
+```{r}
+#| label: hw10-q2-grid-table
+#| echo: false
+knitr::kable(q2$grid, digits = 4, row.names = FALSE,
+  col.names = c("mtry", "Node size", "OOB errors", "OOB error", "Selected"))
+```
+
+The selected forest uses **mtry = `r selected$mtry`** and
+**nmin = `r selected$nmin`**, with OOB error
+**`r selected$oob_errors`/`r length(q2$train_rows)` = `r sprintf('%.4f', selected$oob_error)`**.
+The selected model is retained from this search, rather than replaced by
+a newly randomized forest. The minimum OOB error is tuning evidence and
+can be optimistic after searching multiple settings.
+
+PCA is fitted once to all training pixels, as required. Thus an OOB row
+did not train its OOB trees, but its pixels did contribute to the PCA
+representation. These OOB errors evaluate forests conditional on that
+representation; they are not a fully resampled evaluation of the entire
+PCA-plus-forest pipeline. The independent test assessment below uses a PCA
+basis fitted without any test pixels.
+
+For component $j$, the package's OOB permutation importance is
+
+$$
+\widehat{\mathrm{VI}}_j=\frac{1}{1000}\sum_{b=1}^{1000}
+\left\{\widehat e_{b,\mathrm{OOB}}^{\mathrm{permute}(j)}
+-\widehat e_{b,\mathrm{OOB}}\right\}.
+$$
+
+Here each error is a **single-tree OOB misclassification rate**; one PC
+is shuffled among that tree's OOB observations while other PCs are held
+fixed. An importance of 0.05 represents an average increase of five
+percentage points in these tree-level errors. It is not the change in
+the whole forest's OOB error after removing the variable. The
+[implementation](https://github.com/teazrq/RLT/blob/3afa4d6d4b5b4b1a0881288fbaadeb4f1e78f20d/src/classification/Cla_Uni_0_Forest_Build.cpp)
+was checked to confirm this definition.
+
+```{r}
+#| label: hw10-q2-importance-table
+#| echo: false
+knitr::kable(vi, digits = 5, row.names = FALSE,
+             col.names = c("Principal component", "OOB permutation importance"))
+```
+
+![OOB permutation importance for all 20 PCs in the selected forest, ordered by importance.](figures/q2-importance.svg){width=6.8in}
+
+The three largest importance estimates belong to
+**`r paste(vi_ranked$component[1:3], collapse = ', ')`**. PCA orders components
+by pixel variance, not digit-discrimination ability, so importance need
+not decrease with PC number. PCs represent combinations of pixels, and
+their importances describe this fitted forest's predictive reliance,
+not causal effects or the importance of individual pixels. Training PCs
+are uncorrelated but need not be independent. Small importance values,
+including any slightly negative values, should not be overinterpreted.
+
+Here PC2 and PC1 dominate, with importance estimates **0.20433** and
+**0.13889**, respectively. PC11 (0.02452) is more important than several
+earlier PCs, illustrating why variance explained alone does not rank
+classification usefulness. All 20 estimates are positive in this run.
+
+### (c) Final test assessment
+
+After selection, I project the reserved test images using the training
+PCA and obtain predictions from the selected forest once.
+
+```{r}
+#| label: hw10-q2-test
+#| eval: false
+test_scores <- predict(pca, as.matrix(raw[test_rows, -1]))[, 1:20, drop = FALSE]
+colnames(test_scores) <- colnames(scores)
+test_y <- factor(raw$Digit[test_rows], levels = levels(y))
+test_pred <- predict(selected_fit, test_scores)$Prediction
+mean(test_pred != test_y)
+table(Observed = test_y, Predicted = factor(test_pred, levels = levels(y)))
+```
+
+The test misclassification rate is
+**`r sum(q2$test_predictions != q2$test_y)`/`r length(q2$test_y)` = `r sprintf('%.4f', q2$test_error)`**
+(**`r sprintf('%.2f', 100 * q2$test_error)`%**). Rows below are observed digits;
+columns are predicted digits, with all three classes retained.
+
+```{r}
+#| label: hw10-q2-confusion
+#| echo: false
+knitr::kable(as.data.frame.matrix(q2$confusion),
+  col.names = paste("Predicted", colnames(q2$confusion)), row.names = TRUE)
+```
+
+The seven errors consist of three digit-1 images predicted as 7 and four
+digit-7 images predicted as 6. All 106 digit-6 images are classified correctly.
+The test set assesses the selected PCA-plus-forest procedure, rather than
+helping choose a setting. A single finite test set still has sampling
+uncertainty. The saved [test predictions](analysis/q2-test-predictions.csv),
+[OOB predictions](analysis/q2-oob-predictions.csv), and
+[complete grid](analysis/q2-oob-grid.csv) allow the error counts to be
+recomputed directly.
+
+## Question 3: Planning a random-forest analysis skill
+
+In earlier homework, some students wrote long skill files with detailed instructions, while others wrote short skills emphasizing their specific requirements or references. These approaches may perform differently depending on the AI and the task. A capable AI may already know standard ways to perform an analysis, so some instructions may be redundant, add little value, or sometimes make the analysis worse. It may be more useful to specify your personal choices for the analysis. An AI with more limited knowledge may benefit from detailed instructions that remind it of the steps to perform.
+
+a. Write one paragraph describing how you would write a skill that directs an AI to perform a random-forest analysis and produce a report for a future dataset. Discuss how you would balance standard analysis instructions with your personal preferences, considering the AI's capabilities.
+
+b. Provide **10 instructions** you would consider including in the skill, **ordered from the most basic instructions to the more personal preferences**. Your list may cover computation, tuning, tables, figures, interpretation, presentation, or other aspects of a random-forest report.
+
+You only need to discuss how the skill should be written. You are not required to write a complete skill file or test it.
+
+### (a) How I would design the skill
+
+I would write a short, dataset-independent skill that states the decisions
+I want an AI to make and the evidence I expect in its report. For a capable
+AI, I would keep reminders about standard forest fitting brief, while
+explicitly protecting important data roles: transformations and tuning must
+use training data, and final test results must not change model selection.
+I would give more detail about decisions that vary across implementations,
+such as node-size semantics, OOB aggregation, and permutation importance.
+For a less experienced AI, I would add a small procedural checklist or a
+reference to the package documentation, rather than prescribe every command.
+My personal preferences would emphasize a reproducible computation budget,
+common comparison conditions, restrained claims about small improvements,
+and a compact report with a useful table and figure. I would allow justified
+changes to defaults when the dataset's size, class balance, or dependence
+structure requires them, and ask the agent to explain those changes.
+
+### (b) Ten instructions, from basic requirements to personal preferences
+
+1. **Confirm the task and data.** Identify the response, predictors, units of observation, variable types, missingness, and whether the task is regression or classification; flag obvious leakage or dependence.
+2. **Separate data roles.** Define a training/evaluation design appropriate to independent, grouped, or time-ordered observations, and reserve the final test outcomes until model selection is complete.
+3. **Fit preprocessing within the appropriate training data.** Learn imputations, encodings, and optional dimension reduction without using test observations; explain whether OOB evaluation includes or conditions on preprocessing.
+4. **Record the implementation and randomness.** State the package/version, seed, tree count, bootstrap size, replacement rule, candidate-predictor setting, and node-size meaning; save reproducible code and row assignments.
+5. **Tune a justified, bounded grid.** Compare node size and `mtry` using OOB error or an appropriate training-only validation scheme, holding other settings fixed and using enough trees to stabilize comparisons.
+6. **Evaluate the selected model.** Report the relevant error metric and a simple baseline; for classification include observed-by-predicted confusion counts and class-specific performance when overall error hides weaknesses.
+7. **Interpret permutation importance carefully.** State the perturbation and loss being used, retain near-zero or negative estimates, and discuss correlated predictors without presenting importance as causation.
+8. **Prefer stable evidence over tiny improvements.** Use common resampling conditions, state a tie-breaking rule before evaluation, and qualify small differences; use extra computation only when it could change a meaningful decision.
+9. **Use a compact table and a purposeful figure.** Mark the selected setting, label axes and units clearly, use consistent rounding and accessible colors, and avoid figures that merely decorate the report.
+10. **Keep the main report concise.** Aim for one readable page at 11-point font, leading with the final model and its supporting evidence; place runnable code and detailed diagnostics in accompanying files and end with the main limitation.
