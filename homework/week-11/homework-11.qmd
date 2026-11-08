@@ -1,0 +1,297 @@
+---
+title: "Homework 11"
+pagetitle: "Homework 11"
+body-classes: "lecture-page practice-page"
+format:
+  html:
+    embed-resources: true
+    html-math-method: mathml
+    page-layout: full
+    toc: false
+    toc-location: body
+    toc-title: "On this page"
+    toc-depth: 2
+    css: report.css
+    code-fold: true
+    code-summary: "Show the workflow"
+---
+
+Solutions will be available after Monday, November 9, 2026.
+
+## Question 1: Implementing K-means
+
+K-means is a relatively simple algorithm that we can write ourselves. For Questions 1 and 2, do not use an existing function that performs K-means directly.
+
+Generate 10 observations with two independent standard normal coordinates. Set a random seed and report it. Randomly assign the observations to $K=2$ clusters, making sure neither cluster is empty. Let $C(i)$ denote the cluster assigned to observation $x_i$, and let $m_k$ denote the mean of cluster $k$.
+
+a. Perform one iteration: calculate the cluster means, then assign each observation to its closest mean using Euclidean distance. Report the means and updated assignments, and plot the observations colored by their updated assignments.
+
+b. Write a function that repeats these two steps until the assignments stop changing or a specified maximum number of iterations is reached. Your function should work for a data matrix with any number of variables and a chosen number of clusters $K$. Start from a nonempty assignment to each cluster; if a cluster becomes empty during iteration, keep its previous mean. Recalculate the cluster means from the final assignments before returning them. Return the final assignments, cluster means, and within-cluster sum of squares,
+
+   $$
+   \sum_{k=1}^K\sum_{i:\,C(i)=k}\lVert x_i-m_k\rVert^2.
+   $$
+
+c. Apply your function to the same 10 observations from two different random initial assignments. Report the final plots, cluster means, and within-cluster sums of squares. Do the two runs produce the same grouping and objective value? Explain your findings.
+
+### (a) One iteration
+
+Using NumPy `default_rng`, I generate independent standard normal coordinates
+with **seed 20261108**. Initial assignment A uses **seed 1101**: include each
+label once, draw the remaining labels randomly, then shuffle. Thus neither
+initial cluster is empty. The initial means are
+$m_1=(-0.1431,-0.2901)$ and $m_2=(0.2889,0.1288)$.
+I assign each observation to the nearest mean; squared Euclidean distances
+give the same assignments, with exact ties going to the smaller label.
+
+| Observation | x1 | x2 | Initial A | One step A |
+| --- | --- | --- | --- | --- |
+| 1 | -0.5376 | -0.1509 | 2 | 1 |
+| 2 | 0.3520 | 0.3761 | 2 | 2 |
+| 3 | 0.0960 | 0.4620 | 1 | 2 |
+| 4 | 0.1387 | -0.6923 | 2 | 1 |
+| 5 | 0.5939 | 1.1546 | 2 | 2 |
+| 6 | -0.2076 | -2.0303 | 1 | 1 |
+| 7 | 0.0107 | -0.6469 | 1 | 1 |
+| 8 | -0.4715 | 1.0547 | 1 | 2 |
+| 9 | 0.4189 | 0.3024 | 2 | 2 |
+| 10 | 0.7673 | -0.2170 | 2 | 2 |
+
+![One assignment update; crosses are the initial means used for reassignment.](figures/q1-one-step.svg){width=3.6in}
+
+### (b) Custom K-means function
+
+The following NumPy implementation works for any finite $n\times p$ matrix
+and $1\leq K\leq n$. Labels are 0-based internally. It starts with nonempty
+clusters, retains the previous mean of an empty cluster, stops at unchanged
+assignments or `max_iter`, and recalculates means before returning WCSS.
+The checks cover empty clusters, exact ties, and stopping at the iteration limit.
+
+```python
+import numpy as np
+def random_assignments(n, k, seed):
+    if not 1 <= k <= n:
+        raise ValueError("Require 1 <= k <= n.")
+    rng = np.random.default_rng(seed)
+    labels = np.concatenate((np.arange(k), rng.integers(k, size=n - k)))
+    return rng.permutation(labels)
+def update_means(x, labels, k, previous=None):
+    means = np.zeros((k, x.shape[1])) if previous is None else previous.copy()
+    for j in range(k):
+        members = x[labels == j]
+        if len(members):
+            means[j] = members.mean(axis=0)
+        elif previous is None:
+            raise ValueError("Initial clusters must be nonempty.")
+    return means
+def nearest_labels(x, means):
+    squared_distances = ((x[:, None, :] - means[None, :, :]) ** 2).sum(axis=2)
+    return squared_distances.argmin(axis=1)  # first label wins exact ties
+def kmeans(x, k, initial, max_iter=300):
+    x = np.asarray(x, dtype=float)
+    initial = np.asarray(initial)
+    if x.ndim != 2 or not x.shape[0] or not x.shape[1] or not np.isfinite(x).all():
+        raise ValueError("x must be a finite nonempty two-dimensional matrix.")
+    if not isinstance(k, (int, np.integer)) or not 1 <= k <= len(x):
+        raise ValueError("Require integer 1 <= k <= n.")
+    if (initial.shape != (len(x),) or not np.issubdtype(initial.dtype, np.integer)
+            or not np.array_equal(np.unique(initial), np.arange(k))):
+        raise ValueError("Initial integer labels must represent every cluster.")
+    if not isinstance(max_iter, (int, np.integer)) or max_iter < 1:
+        raise ValueError("max_iter must be a positive integer.")
+    labels = initial.copy()
+    means = None
+    history = []
+    converged = False
+    for iteration in range(1, max_iter + 1):
+        means = update_means(x, labels, k, means)
+        updated = nearest_labels(x, means)
+        history.append(float(((x - means[updated]) ** 2).sum()))
+        if np.array_equal(updated, labels):
+            converged = True
+            break
+        labels = updated
+    means = update_means(x, labels, k, means)
+    wcss = float(((x - means[labels]) ** 2).sum())
+    return dict(labels=labels, means=means, wcss=wcss, iterations=iteration,
+                converged=converged, history=np.array(history))
+```
+
+For fixed assignments, cluster means minimize squared distances; for fixed
+means, nearest-center assignment minimizes each point's contribution.
+Thus WCSS cannot increase, although different starts can reach different local solutions.
+
+### (c) Two random starts
+
+Run A uses seed **1101**, and B uses **1102**, with a maximum of 300 iterations.
+Both converge in **two iterations**. Their WCSS values are **4.468452** and
+**4.566039**, respectively. Final means and sizes are:
+
+| Run | Cluster | n | x1 | x2 |
+| --- | --- | --- | --- | --- |
+| A | 1 | 4 | -0.1490 | -0.8801 |
+| A | 2 | 6 | 0.2928 | 0.5221 |
+| B | 1 | 5 | 0.1979 | 0.6700 |
+| B | 2 | 5 | 0.0343 | -0.7475 |
+
+![Final assignments and means for runs A and B; axes use identical limits.](figures/q1-final.svg){width=6.5in}
+
+Run A gives groups $\{1,4,6,7\}$ and $\{2,3,5,8,9,10\}$;
+run B gives $\{1,4,6,7,10\}$ and $\{2,3,5,8,9\}$.
+After accounting for arbitrary cluster labels, only observation **10** changes
+groups. Both allocations are stable, but A has lower WCSS. I prefer A among
+these starts; this demonstrates initialization sensitivity without proving global optimality.
+
+## Question 2: Image color compression
+
+Pick your favorite color image and use your K-means function from Question 1 to cluster its pixels. For computational efficiency, resize the image to no more than $200\times200$ pixels and use its three RGB color channels.
+
+a. Plot the original image and report its dimensions. Transform it into a data matrix with one observation per pixel and three variables: red, green, and blue. Report the dimensions of this matrix.
+
+b. For $K=2,3,5,10$, apply your function to the pixel data. Report the cluster means and within-cluster sum of squares for each $K$. Reconstruct and plot each compressed image by replacing every pixel with its assigned cluster mean. Use the same RGB scale for all fits.
+
+c. Which value of $K$ would you choose for this image? Briefly justify your choice using the reconstructed images and the within-cluster sums of squares.
+
+### (a) Image and pixel matrix
+
+I use Matplotlib's Grace Hopper photograph (`sample_data/grace_hopper.jpg`).
+The source is **512 wide by 600 high**; Lanczos resizing preserves its aspect
+ratio at **171 wide by 200 high**. The array shape is $(200,171,3)$, giving a
+**$34{,}200\times3$** pixel matrix. RGB channels use a common **0--255** scale,
+converted to floating point before distances are computed. No channel
+standardization or pixel coordinates are used. The left panel below is the
+resized original; the other panels are the reconstructed images for part (b).
+
+![Resized original and four compressed images, using the same RGB scale.](figures/q2-comparison.png){width=7in}
+
+### (b) Palette means and WCSS
+
+For each $K$, I run the custom function from Question 1 with **five nonempty
+random starts**, seeds $20261108+100K+r$, $r=0,\ldots,4$, and retain the lowest
+WCSS. All 20 runs converge within the **500-iteration** limit.
+Each reconstructed pixel receives its assigned cluster mean.
+
+| K | Selected start | Seed | Iterations | WCSS | RMSE per channel |
+| --- | --- | --- | --- | --- | --- |
+| 2 | 1 | 20261308 | 6 | 159,385,647.52 | 39.41 |
+| 3 | 1 | 20261408 | 8 | 92,528,383.99 | 30.03 |
+| 5 | 1 | 20261608 | 29 | 38,416,520.08 | 19.35 |
+| 10 | 2 | 20262109 | 58 | 16,043,066.34 | 12.50 |
+
+WCSS uses unrounded means; channel RMSE is
+$\sqrt{\mathrm{WCSS}/(34{,}200\times3)}$. Only displayed PNG colors are rounded
+to integers. The complete palettes below show means to two decimal places;
+cluster numbers have no correspondence between different $K$ values.
+
+| K | Cluster | Pixels | Red | Green | Blue |
+| --- | --- | --- | --- | --- | --- |
+| 2 | 1 | 14929 | 153.08 | 141.11 | 156.83 |
+| 2 | 2 | 19271 | 27.69 | 19.19 | 31.86 |
+| 3 | 1 | 7795 | 209.12 | 155.59 | 129.60 |
+| 3 | 2 | 7101 | 91.67 | 125.42 | 187.22 |
+| 3 | 3 | 19304 | 27.87 | 19.32 | 31.90 |
+| 5 | 1 | 1865 | 238.82 | 225.47 | 217.03 |
+| 5 | 2 | 4605 | 207.90 | 146.88 | 114.34 |
+| 5 | 3 | 3000 | 143.22 | 65.37 | 49.80 |
+| 5 | 4 | 6945 | 91.34 | 126.21 | 189.28 |
+| 5 | 5 | 17785 | 19.81 | 17.25 | 31.50 |
+| 10 | 1 | 1501 | 117.96 | 37.47 | 30.67 |
+| 10 | 2 | 2176 | 213.79 | 174.69 | 156.11 |
+| 10 | 3 | 692 | 124.19 | 104.15 | 106.48 |
+| 10 | 4 | 3594 | 107.84 | 142.14 | 200.66 |
+| 10 | 5 | 1724 | 177.26 | 91.73 | 60.25 |
+| 10 | 6 | 13922 | 17.51 | 15.20 | 22.38 |
+| 10 | 7 | 3200 | 71.39 | 109.01 | 179.31 |
+| 10 | 8 | 3687 | 25.69 | 24.55 | 66.59 |
+| 10 | 9 | 1309 | 245.16 | 238.78 | 233.20 |
+| 10 | 10 | 2395 | 212.86 | 140.07 | 98.07 |
+
+### (c) Choice of K
+
+I choose **$K=10$**. Two colors lose the blue background and skin tones;
+three restore these colors but lose white detail. Five recover highlights,
+while ten better preserve facial shading, uniform details, and dark-blue tones.
+Moving from 5 to 10 colors reduces WCSS by **58.24%** and channel RMSE from
+**19.35 to 12.50**. This improvement justifies the larger palette for this
+portrait; $K=5$ is a reasonable alternative when palette simplicity matters more.
+Lower WCSS alone does not identify a uniquely correct $K$, since the global
+optimum cannot increase with $K$. This measures color quantization, not file-size reduction.
+
+## Question 3: Hierarchical clustering of cars
+
+The file `data/mtcars.csv` contains 11 numerical variables for 32 cars, including fuel economy, horsepower, and weight. The `car` column gives the model names; use it to label observations, not as a clustering variable. You may use existing hierarchical clustering functions for this question.
+
+a. Standardize each numerical variable to have mean 0 and standard deviation 1. Using Euclidean distance, perform hierarchical clustering with single, complete, and average linkage. Plot the three dendrograms with the car names and compare the results.
+
+b. Choose one linkage method and a number of clusters that you consider reasonable. Report the cluster memberships and a table of cluster means on the original variable scales. Describe the main characteristics of the groups and explain your choice using the dendrogram and table. Briefly explain why standardizing the variables matters for this analysis.
+
+### (a) Standardization and linkage comparison
+
+All **32 cars and 11 numerical variables** are used, with `car` only as a label
+and no missing values. I standardize using $z_{ij}=(x_{ij}-\bar x_j)/s_j$,
+where $s_j$ is the sample standard deviation with divisor **31**.
+SciPy hierarchical clustering uses Euclidean distances and explicit single,
+complete, and average linkage. These use, respectively, the minimum, maximum,
+and mean cross-cluster pairwise distance. Optimizing leaf order changes only
+the display, not the merges.
+
+![Single linkage.](figures/q3-single.svg){width=6.7in}
+
+![Complete linkage; the dashed line selects two clusters.](figures/q3-complete.svg){width=6.7in}
+
+![Average linkage.](figures/q3-average.svg){width=6.7in}
+
+At a common **three-cluster** cut, the group sizes are:
+
+| Method | Cluster 1 | Cluster 2 | Cluster 3 |
+| --- | --- | --- | --- |
+| single | 30 | 1 | 1 |
+| complete | 5 | 15 | 12 |
+| average | 18 | 12 | 2 |
+
+Single linkage chains 30 cars together, leaving Ford Pantera L and Maserati
+Bora as singletons. Complete linkage separates five manual-transmission cars,
+15 generally lighter/economical cars, and 12 automatic eight-cylinder cars.
+Average linkage groups the two singletons together, retains the same 12-car
+group, and combines the other 18 cars.
+
+### (b) Selected clusters and interpretation
+
+I choose **complete linkage, $K=2$**. The last merge heights are **5.9049,
+6.0178, and 8.4802**. Cutting at **7.2490** uses the large final gap;
+the three-cluster interval, 5.9049--6.0178, is much narrower. This supports
+a broad two-group summary, though finer subdivisions remain possible.
+
+| Cluster | n | Car models |
+| --- | --- | --- |
+| 1 | 17 | Mazda RX4; Mazda RX4 Wag; Hornet Sportabout; Duster 360; Merc 450SE; Merc 450SL; Merc 450SLC; Cadillac Fleetwood; Lincoln Continental; Chrysler Imperial; Dodge Challenger; AMC Javelin; Camaro Z28; Pontiac Firebird; Ford Pantera L; Ferrari Dino; Maserati Bora |
+| 2 | 15 | Datsun 710; Hornet 4 Drive; Valiant; Merc 240D; Merc 230; Merc 280; Merc 280C; Fiat 128; Honda Civic; Toyota Corolla; Toyota Corona; Fiat X1-9; Porsche 914-2; Lotus Europa; Volvo 142E |
+
+Cluster means on the **original scales** are split into two tables for readability:
+
+| Cluster | n | mpg | cyl | disp | hp | wt |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 17 | 16.065 | 7.647 | 318.141 | 195.529 | 3.780 |
+| 2 | 15 | 24.653 | 4.533 | 131.647 | 91.333 | 2.580 |
+
+| Cluster | drat | qsec | vs | am | gear | carb |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 3.331 | 16.694 | 0.000 | 0.294 | 3.471 | 3.706 |
+| 2 | 3.897 | 19.158 | 0.933 | 0.533 | 3.933 | 1.800 |
+
+`disp` is cubic inches, `wt` is thousands of pounds, and `qsec` is quarter-mile
+time; means of `am` and `vs` are proportions with manual transmission and
+straight engines, respectively ([variable definitions](https://stat.ethz.ch/R-manual/R-devel/library/datasets/html/mtcars.html)).
+
+**Cluster 1** has larger engines, higher power, and greater weight
+(318.14 cu.in., 195.53 hp, 3.780 thousand lbs), with lower fuel economy
+(16.06 mpg). It combines the automatic eight-cylinder group and the five-car
+manual group visible at $K=3$. **Cluster 2** is generally lighter and more
+economical (2.580 thousand lbs, 24.65 mpg), with smaller engines and lower power
+(131.65 cu.in., 91.33 hp); 53.3% have manual transmissions.
+
+Standardization prevents variables such as displacement and horsepower from
+dominating Euclidean distance merely because of their units. Centering alone
+would not change distances. Scaling does not remove correlations or resolve
+all choices about binary/ordinal variables; these are descriptive groups,
+not established car classes.
